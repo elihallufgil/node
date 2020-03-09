@@ -34,10 +34,10 @@ public class NetworkData implements IPropagatable {
 
     @Override
     public void setHash(Hash hash) {
-
+        // no implementation
     }
 
-    @JsonInclude(JsonInclude.Include.ALWAYS)
+    @JsonInclude()
     public Map<NodeType, NetworkNodeData> getSingleNodeNetworkDataMap() {
         return singleNodeNetworkDataMap;
     }

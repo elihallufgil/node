@@ -23,10 +23,9 @@ import java.util.concurrent.atomic.AtomicLong;
 @Slf4j
 public class TransactionSynchronizationService implements ITransactionSynchronizationService {
 
-    private final static String RECOVERY_NODE_GET_BATCH_ENDPOINT = "/transaction_batch";
-    private final static String STARTING_INDEX_URL_PARAM_ENDPOINT = "?starting_index=";
-    private final static long MAXIMUM_BUFFER_SIZE = 50000;
-
+    private static final String RECOVERY_NODE_GET_BATCH_ENDPOINT = "/transaction_batch";
+    private static final String STARTING_INDEX_URL_PARAM_ENDPOINT = "?starting_index=";
+    private static final long MAXIMUM_BUFFER_SIZE = 300000;
     @Autowired
     private ITransactionHelper transactionHelper;
     @Autowired
@@ -56,7 +55,7 @@ public class TransactionSynchronizationService implements ITransactionSynchroniz
                 byte[] buf = new byte[Math.toIntExact(MAXIMUM_BUFFER_SIZE)];
                 int offset = 0;
                 int n;
-                while ((n = response.getBody().read(buf, offset, buf.length)) > 0) {
+                while ((n = response.getBody().read(buf, offset, buf.length - offset)) > 0) {
                     try {
                         TransactionData missingTransaction = jacksonSerializer.deserialize(buf);
                         if (missingTransaction != null) {
@@ -72,7 +71,7 @@ public class TransactionSynchronizationService implements ITransactionSynchroniz
                         }
 
                     } catch (Exception e) {
-                        throw new TransactionSyncException(e.getMessage());
+                        throw new TransactionSyncException("Error at getting chunks", e);
                     }
                 }
                 return null;
@@ -87,14 +86,15 @@ public class TransactionSynchronizationService implements ITransactionSynchroniz
                 }
             }
             log.info("Finished to get missing transactions");
+        } catch (TransactionSyncException e) {
+            throw new TransactionSyncException("Error at missing transactions from recovery Node.\n" + e.getMessage(), e);
         } catch (Exception e) {
-            log.error("Error at missing transactions from recovery Node");
-            throw new TransactionSyncException(e.getMessage());
+            throw new TransactionSyncException("Error at missing transactions from recovery Node", e);
         }
 
     }
 
-    private Thread insertMissingTransactionThread(List<TransactionData> missingTransactions, Set<Hash> trustChainUnconfirmedExistingTransactionHashes, AtomicLong completedMissingTransactionNumber, Thread monitorMissingTransactionThread, AtomicBoolean finishedToReceive) throws Exception {
+    private Thread insertMissingTransactionThread(List<TransactionData> missingTransactions, Set<Hash> trustChainUnconfirmedExistingTransactionHashes, AtomicLong completedMissingTransactionNumber, Thread monitorMissingTransactionThread, AtomicBoolean finishedToReceive) {
         return new Thread(() -> {
             Map<Hash, AddressTransactionsHistory> addressToTransactionsHistoryMap = new ConcurrentHashMap<>();
             int offset = 0;

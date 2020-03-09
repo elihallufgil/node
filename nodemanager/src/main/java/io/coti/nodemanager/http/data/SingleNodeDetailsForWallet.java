@@ -4,11 +4,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.coti.basenode.data.FeeData;
 import io.coti.basenode.data.Hash;
 import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
+
+import java.io.Serializable;
 
 @Data
-@Slf4j
-public class SingleNodeDetailsForWallet {
+public class SingleNodeDetailsForWallet implements Serializable {
 
     private String nodeHash;
     private String httpAddress;

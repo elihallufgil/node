@@ -2,10 +2,10 @@ package io.coti.dspnode.services;
 
 import io.coti.basenode.communication.interfaces.IPropagationPublisher;
 import io.coti.basenode.communication.interfaces.ISender;
-import io.coti.basenode.crypto.DspVoteCrypto;
-import io.coti.basenode.data.DspVote;
+import io.coti.basenode.crypto.TransactionDspVoteCrypto;
 import io.coti.basenode.data.NodeType;
 import io.coti.basenode.data.TransactionData;
+import io.coti.basenode.data.TransactionDspVote;
 import io.coti.basenode.data.TransactionType;
 import io.coti.basenode.services.BaseNodeTransactionService;
 import io.coti.basenode.services.interfaces.INetworkService;
@@ -37,7 +37,7 @@ public class TransactionService extends BaseNodeTransactionService {
     @Autowired
     private ISender sender;
     @Autowired
-    private DspVoteCrypto dspVoteCrypto;
+    private TransactionDspVoteCrypto transactionDspVoteCrypto;
     @Autowired
     private INetworkService networkService;
 
@@ -49,16 +49,25 @@ public class TransactionService extends BaseNodeTransactionService {
     }
 
     public void handleNewTransactionFromFullNode(TransactionData transactionData) {
+        log.debug("Running new transactions from full node handler");
+        if (transactionHelper.isTransactionAlreadyPropagated(transactionData)) {
+            log.debug("Transaction already exists: {}", transactionData.getHash());
+            return;
+        }
         try {
-            log.debug("Running new transactions from full node handler");
-            if (transactionHelper.isTransactionAlreadyPropagated(transactionData)) {
-                log.debug("Transaction already exists: {}", transactionData.getHash());
+            transactionHelper.startHandleTransaction(transactionData);
+            if (!validationService.validatePropagatedTransactionDataIntegrity(transactionData)) {
+                log.error("Data Integrity validation failed: {}", transactionData.getHash());
                 return;
             }
-            transactionHelper.startHandleTransaction(transactionData);
-            if (!validationService.validatePropagatedTransactionDataIntegrity(transactionData) ||
-                    !validationService.validateBalancesAndAddToPreBalance(transactionData)) {
-                log.info("Invalid Transaction Received!");
+            if (hasOneOfParentsMissing(transactionData)) {
+                if (!postponedTransactions.containsKey(transactionData)) {
+                    postponedTransactions.put(transactionData, true);
+                }
+                return;
+            }
+            if (!validationService.validateBalancesAndAddToPreBalance(transactionData)) {
+                log.error("Balance check failed: {}", transactionData.getHash());
                 return;
             }
             transactionHelper.attachTransactionToCluster(transactionData);
@@ -68,13 +77,28 @@ public class TransactionService extends BaseNodeTransactionService {
                     NodeType.TrustScoreNode,
                     NodeType.DspNode,
                     NodeType.ZeroSpendServer,
-                    NodeType.FinancialServer));
+                    NodeType.FinancialServer,
+                    NodeType.HistoryNode));
+            transactionPropagationCheckService.addUnconfirmedTransaction(transactionData.getHash());
             transactionHelper.setTransactionStateToFinished(transactionData);
             transactionsToValidate.add(transactionData);
         } catch (Exception ex) {
             log.error("Exception while handling transaction {}", transactionData, ex);
         } finally {
+            boolean isTransactionFinished = transactionHelper.isTransactionFinished(transactionData);
             transactionHelper.endHandleTransaction(transactionData);
+            if (isTransactionFinished) {
+                processPostponedTransactions(transactionData);
+            }
+        }
+    }
+
+    @Override
+    protected void handlePostponedTransaction(TransactionData postponedTransaction, boolean isTransactionFromFullNode) {
+        if (isTransactionFromFullNode) {
+            handleNewTransactionFromFullNode(postponedTransaction);
+        } else {
+            handlePropagatedTransaction(postponedTransaction);
         }
     }
 
@@ -86,18 +110,19 @@ public class TransactionService extends BaseNodeTransactionService {
         while (!transactionsToValidate.isEmpty()) {
             TransactionData transactionData = transactionsToValidate.remove();
             log.debug("DSP Fully Checking transaction: {}", transactionData.getHash());
-            DspVote dspVote = new DspVote(
+            TransactionDspVote transactionDspVote = new TransactionDspVote(
                     transactionData.getHash(),
                     validationService.fullValidation(transactionData));
-            dspVoteCrypto.signMessage(dspVote);
+            transactionDspVoteCrypto.signMessage(transactionDspVote);
             String zerospendReceivingAddress = networkService.getSingleNodeData(NodeType.ZeroSpendServer).getReceivingFullAddress();
             log.debug("Sending DSP vote to {} for transaction {}", zerospendReceivingAddress, transactionData.getHash());
-            sender.send(dspVote, zerospendReceivingAddress);
+            sender.send(transactionDspVote, zerospendReceivingAddress);
         }
         isValidatorRunning.set(false);
     }
 
-    public void continueHandlePropagatedTransaction(TransactionData transactionData) {
+    @Override
+    protected void continueHandlePropagatedTransaction(TransactionData transactionData) {
         propagationPublisher.propagate(transactionData, Arrays.asList(NodeType.FullNode));
         if (!EnumSet.of(TransactionType.ZeroSpend, TransactionType.Initial).contains(transactionData.getType())) {
             transactionsToValidate.add(transactionData);

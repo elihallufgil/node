@@ -10,15 +10,19 @@ import org.rocksdb.WriteOptions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.SerializationUtils;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
 @Slf4j
 public abstract class Collection<T extends IEntity> {
 
+    private static final int LOCK_BYTE_ARRAY_SIZE = 2;
     @Autowired
     public IDatabaseConnector databaseConnector;
     protected String columnFamilyName = getClass().getName();
+    private Map<Hash, byte[]> lockByteArrayMap;
 
     public void init() {
         log.info("Collection init running. Class: " + columnFamilyName);
@@ -59,12 +63,34 @@ public abstract class Collection<T extends IEntity> {
 
     public void forEach(Consumer<T> consumer) {
         RocksIterator iterator = databaseConnector.getIterator(columnFamilyName);
-        iterator.seekToFirst();
-        while (iterator.isValid()) {
-            T deserialized = (T) SerializationUtils.deserialize(iterator.value());
-            deserialized.setHash(new Hash(iterator.key()));
-            consumer.accept(deserialized);
-            iterator.next();
+        try {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                T deserialized = (T) SerializationUtils.deserialize(iterator.value());
+                deserialized.setHash(new Hash(iterator.key()));
+                consumer.accept(deserialized);
+                iterator.next();
+            }
+        } finally {
+            iterator.close();
+        }
+    }
+
+    public void lockAndGetByHash(Hash hash, Consumer<T> consumer) {
+        if (lockByteArrayMap == null) {
+            throw new IllegalArgumentException(String.format("Collection %s is not lockable", columnFamilyName));
+        }
+        if (hash.getBytes().length < LOCK_BYTE_ARRAY_SIZE) {
+            throw new IllegalArgumentException(String.format("Hash bytes should be of minimum size %s", LOCK_BYTE_ARRAY_SIZE));
+        }
+
+        byte[] lockByteArray = lockByteArrayMap.get(new Hash(Arrays.copyOfRange(hash.getBytes(), 0, LOCK_BYTE_ARRAY_SIZE)));
+        if (lockByteArray == null) {
+            throw new IllegalArgumentException("Hash lock object doesn't exist");
+        }
+        synchronized (lockByteArray) {
+            T entity = getByHash(hash);
+            consumer.accept(entity);
         }
     }
 
@@ -74,8 +100,39 @@ public abstract class Collection<T extends IEntity> {
 
     public boolean isEmpty() {
         RocksIterator iterator = databaseConnector.getIterator(columnFamilyName);
-        iterator.seekToFirst();
-        return !iterator.isValid();
+        try {
+            iterator.seekToFirst();
+            return !iterator.isValid();
+        } finally {
+            iterator.close();
+        }
+    }
+
+    public void deleteByHash(Hash hash) {
+        databaseConnector.delete(columnFamilyName, hash.getBytes());
+    }
+
+    public void deleteAll() {
+        RocksIterator iterator = databaseConnector.getIterator(columnFamilyName);
+        try {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                databaseConnector.delete(columnFamilyName, iterator.key());
+                iterator.next();
+            }
+        } finally {
+            iterator.close();
+        }
+    }
+
+    protected void generateLockObjects() {
+        lockByteArrayMap = new LinkedHashMap<>();
+        for (int i = Byte.MIN_VALUE; i <= Byte.MAX_VALUE; i++) {
+            for (int j = Byte.MIN_VALUE; j <= Byte.MAX_VALUE; j++) {
+                byte[] byteArray = new byte[]{(byte) i, (byte) j};
+                lockByteArrayMap.put(new Hash(byteArray), byteArray);
+            }
+        }
     }
 }
 

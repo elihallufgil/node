@@ -6,6 +6,7 @@ import io.coti.basenode.crypto.NetworkNodeCrypto;
 import io.coti.basenode.crypto.NodeRegistrationCrypto;
 import io.coti.basenode.data.*;
 import io.coti.basenode.database.interfaces.IDatabaseConnector;
+import io.coti.basenode.exceptions.NetworkException;
 import io.coti.basenode.exceptions.TransactionSyncException;
 import io.coti.basenode.http.CustomHttpComponentsClientHttpRequestFactory;
 import io.coti.basenode.http.GetNodeRegistrationRequest;
@@ -13,11 +14,11 @@ import io.coti.basenode.http.GetNodeRegistrationResponse;
 import io.coti.basenode.model.NodeRegistrations;
 import io.coti.basenode.model.Transactions;
 import io.coti.basenode.services.interfaces.*;
-import io.coti.basenode.services.liveview.LiveViewService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -32,11 +33,8 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public abstract class BaseNodeInitializationService {
 
-    private final static String NODE_REGISTRATION = "/node/node_registration";
-    private final static String NODE_MANAGER_NODES_ENDPOINT = "/nodes";
-
-    @Autowired
-    protected INetworkService networkService;
+    private static final String NODE_REGISTRATION = "/node/node_registration";
+    private static final String NODE_MANAGER_NODES_ENDPOINT = "/nodes";
     @Value("${network}")
     protected NetworkType networkType;
     @Value("${server.ip}")
@@ -53,6 +51,14 @@ public abstract class BaseNodeInitializationService {
     @Value("${kycserver.public.key}")
     private String kycServerPublicKey;
     @Autowired
+    protected INetworkService networkService;
+    @Autowired
+    private IAwsService awsService;
+    @Autowired
+    private IDatabaseConnector databaseConnector;
+    @Autowired
+    private IDBRecoveryService dbRecoveryService;
+    @Autowired
     private Transactions transactions;
     @Autowired
     private TransactionIndexService transactionIndexService;
@@ -65,8 +71,6 @@ public abstract class BaseNodeInitializationService {
     @Autowired
     private IMonitorService monitorService;
     @Autowired
-    private LiveViewService liveViewService;
-    @Autowired
     private ITransactionHelper transactionHelper;
     @Autowired
     private ITransactionService transactionService;
@@ -76,8 +80,6 @@ public abstract class BaseNodeInitializationService {
     private IDspVoteService dspVoteService;
     @Autowired
     private IPotService potService;
-    @Autowired
-    private IDatabaseConnector databaseConnector;
     @Autowired
     private IPropagationSubscriber propagationSubscriber;
     @Autowired
@@ -98,31 +100,35 @@ public abstract class BaseNodeInitializationService {
     private ITransactionSynchronizationService transactionSynchronizationService;
     @Autowired
     protected ApplicationContext applicationContext;
+    @Autowired
+    private BuildProperties buildProperties;
+    @Autowired
+    private ITransactionPropagationCheckService transactionPropagationCheckService;
 
     public void init() {
-        try {
-            addressService.init();
-            balanceService.init();
-            clusterStampService.loadClusterStamp();
-            confirmationService.init();
-            transactionIndexService.init();
-            dspVoteService.init();
-            transactionService.init();
-            potService.init();
-            initCommunication();
-            log.info("The communication initialization is done");
-            initTransactionSync();
-            log.info("The transaction sync initialization is done");
-            networkService.setConnectToNetworkUrl(nodeManagerHttpAddress + NODE_MANAGER_NODES_ENDPOINT);
-            networkService.connectToNetwork();
-            propagationSubscriber.initPropagationHandler();
+        log.info("Application name: {}, version: {}", buildProperties.getName(), buildProperties.getVersion());
+    }
 
-            monitorService.init();
-        } catch (Exception e) {
-            log.error("Errors at {}", this.getClass().getSimpleName());
-            log.error("{}: {}", e.getClass().getName(), e.getMessage());
-            System.exit(SpringApplication.exit(applicationContext));
-        }
+    public void initServices() {
+        awsService.init();
+        dbRecoveryService.init();
+        addressService.init();
+        balanceService.init();
+        clusterStampService.loadClusterStamp();
+        confirmationService.init();
+        transactionIndexService.init();
+        dspVoteService.init();
+        transactionService.init();
+        transactionPropagationCheckService.init();
+        potService.init();
+        initCommunication();
+        log.info("The communication initialization is done");
+        initTransactionSync();
+        log.info("The transaction sync initialization is done");
+        networkService.setConnectToNetworkUrl(nodeManagerHttpAddress + NODE_MANAGER_NODES_ENDPOINT);
+        networkService.connectToNetwork();
+        propagationSubscriber.initPropagationHandler();
+        monitorService.init();
     }
 
     private void initTransactionSync() {
@@ -151,9 +157,10 @@ public abstract class BaseNodeInitializationService {
             balanceService.validateBalances();
             log.info("Transactions Load completed");
             clusterService.finalizeInit();
-
+        } catch (TransactionSyncException e) {
+            throw new TransactionSyncException("Error at sync transactions.\n" + e.getMessage(), e);
         } catch (Exception e) {
-            throw new TransactionSyncException(e.getMessage());
+            throw new TransactionSyncException("Error at sync transactions.", e);
         }
     }
 
@@ -171,7 +178,6 @@ public abstract class BaseNodeInitializationService {
     private void handleExistingTransaction(AtomicLong maxTransactionIndex, TransactionData transactionData) {
         clusterService.addExistingTransactionOnInit(transactionData);
 
-        liveViewService.addTransaction(transactionData);
         confirmationService.insertSavedTransaction(transactionData, maxTransactionIndex);
 
         transactionService.addToExplorerIndexes(transactionData);
@@ -198,7 +204,11 @@ public abstract class BaseNodeInitializationService {
     }
 
     private NetworkData getNetworkDetailsFromNodeManager() {
-        return restTemplate.getForEntity(nodeManagerHttpAddress + NODE_MANAGER_NODES_ENDPOINT, NetworkData.class).getBody();
+        try {
+            return restTemplate.getForEntity(nodeManagerHttpAddress + NODE_MANAGER_NODES_ENDPOINT, NetworkData.class).getBody();
+        } catch (Exception e) {
+            throw new NetworkException("Error at getting network details.", e);
+        }
     }
 
     private void getNodeRegistration(NetworkNodeData networkNodeData) {
@@ -220,8 +230,9 @@ public abstract class BaseNodeInitializationService {
                 nodeRegistrations.put(nodeRegistrationData);
             }
         } catch (HttpClientErrorException | HttpServerErrorException e) {
-            log.error("Error at registration of node. Registrar response: \n {}", e.getResponseBodyAsString());
-            System.exit(SpringApplication.exit(applicationContext));
+            throw new NetworkException(String.format("Error at registration of node. Registrar response: %n %s", e.getResponseBodyAsString()), e);
+        } catch (Exception e) {
+            throw new NetworkException("Error at registration of node.", e);
         }
     }
 

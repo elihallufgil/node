@@ -6,8 +6,8 @@ import io.coti.basenode.data.BaseTransactionData;
 import io.coti.basenode.data.FullNodeFeeData;
 import io.coti.basenode.data.Hash;
 import io.coti.basenode.data.TransactionData;
-import io.coti.basenode.http.BaseResponse;
 import io.coti.basenode.http.Response;
+import io.coti.basenode.http.interfaces.IResponse;
 import io.coti.basenode.services.interfaces.IValidationService;
 import io.coti.fullnode.crypto.FullNodeFeeRequestCrypto;
 import io.coti.fullnode.http.FullNodeFeeRequest;
@@ -27,10 +27,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static io.coti.basenode.http.BaseNodeHttpStringConstants.*;
+import static io.coti.basenode.services.TransactionHelper.CURRENCY_SCALE;
 
 @Slf4j
 @Service
 public class FeeService {
+
     private static final int FULL_NODE_FEE_ADDRESS_INDEX = 0;
     @Value("#{'${zero.fee.user.hashes}'.split(',')}")
     private List<String> zeroFeeUserHashes;
@@ -49,7 +51,7 @@ public class FeeService {
     @Autowired
     private IValidationService validationService;
 
-    public ResponseEntity<BaseResponse> createFullNodeFee(FullNodeFeeRequest fullNodeFeeRequest) {
+    public ResponseEntity<IResponse> createFullNodeFee(FullNodeFeeRequest fullNodeFeeRequest) {
         try {
             if (!fullNodeFeeRequestCrypto.verifySignature(fullNodeFeeRequest)) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new Response(INVALID_SIGNATURE, STATUS_ERROR));
@@ -65,11 +67,17 @@ public class FeeService {
                 amount = new BigDecimal(0);
             } else {
                 BigDecimal fee = originalAmount.multiply(feePercentage).divide(new BigDecimal(100));
-                amount = (fee.compareTo(minimumFee) <= 0 ? minimumFee : fee.compareTo(maximumFee) >= 0 ? maximumFee : fee);
+                if (fee.compareTo(minimumFee) <= 0) {
+                    amount = minimumFee;
+                } else if (fee.compareTo(maximumFee) >= 0) {
+                    amount = maximumFee;
+                } else {
+                    amount = fee;
+                }
             }
 
-            if (amount.scale() > 8) {
-                amount = amount.setScale(8, RoundingMode.DOWN);
+            if (amount.scale() > CURRENCY_SCALE) {
+                amount = amount.setScale(CURRENCY_SCALE, RoundingMode.DOWN);
             }
             if (amount.scale() > 0) {
                 amount = amount.stripTrailingZeros();
@@ -94,14 +102,14 @@ public class FeeService {
         return nodeCryptoHelper.generateAddress(seed, FULL_NODE_FEE_ADDRESS_INDEX);
     }
 
-    public void setFullNodeFeeHash(FullNodeFeeData fullNodeFeeData) throws ClassNotFoundException {
-        BaseTransactionCrypto.FullNodeFeeData.setBaseTransactionHash(fullNodeFeeData);
+    public void setFullNodeFeeHash(FullNodeFeeData fullNodeFeeData) {
+        BaseTransactionCrypto.FULL_NODE_FEE_DATA.setBaseTransactionHash(fullNodeFeeData);
     }
 
-    public void signFullNodeFee(FullNodeFeeData fullNodeFeeData) throws ClassNotFoundException {
+    public void signFullNodeFee(FullNodeFeeData fullNodeFeeData) {
         List<BaseTransactionData> baseTransactions = new ArrayList<>();
         baseTransactions.add(fullNodeFeeData);
-        BaseTransactionCrypto.FullNodeFeeData.signMessage(new TransactionData(baseTransactions), fullNodeFeeData, FULL_NODE_FEE_ADDRESS_INDEX);
+        BaseTransactionCrypto.FULL_NODE_FEE_DATA.signMessage(new TransactionData(baseTransactions), fullNodeFeeData, FULL_NODE_FEE_ADDRESS_INDEX);
     }
 
     public boolean validateFeeData(FullNodeFeeData fullNodeFeeData) {

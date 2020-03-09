@@ -12,9 +12,6 @@ import java.io.FileWriter;
 import java.io.IOException;
 
 
-/**
- * A service that provides Cluster Stamp functionality for Zero Spend node.
- */
 @Slf4j
 @Service
 public class ClusterStampService extends BaseNodeClusterStampService {
@@ -26,10 +23,9 @@ public class ClusterStampService extends BaseNodeClusterStampService {
     }
 
     private void updateClusterStampFileWithSignature(SignatureData signature) {
-        try {
-            String clusterstampFileLocation = clusterStampFilePrefix + CLUSTERSTAMP_FILE_SUFFIX;
-            FileWriter clusterstampFileWriter = new FileWriter(clusterstampFileLocation, true);
-            BufferedWriter clusterStampBufferedWriter = new BufferedWriter(clusterstampFileWriter);
+        String clusterstampFileLocation = clusterStampFilePrefix + CLUSTERSTAMP_FILE_SUFFIX;
+        try (FileWriter clusterstampFileWriter = new FileWriter(clusterstampFileLocation, true);
+             BufferedWriter clusterStampBufferedWriter = new BufferedWriter(clusterstampFileWriter)) {
             clusterStampBufferedWriter.newLine();
             clusterStampBufferedWriter.newLine();
             clusterStampBufferedWriter.append("# Signature");
@@ -37,7 +33,6 @@ public class ClusterStampService extends BaseNodeClusterStampService {
             clusterStampBufferedWriter.append("r," + signature.getR());
             clusterStampBufferedWriter.newLine();
             clusterStampBufferedWriter.append("s," + signature.getS());
-            clusterStampBufferedWriter.close();
         } catch (IOException e) {
             log.error("Exception at clusterstamp signing");
             throw new ClusterStampValidationException(BAD_CSV_FILE_FORMAT);

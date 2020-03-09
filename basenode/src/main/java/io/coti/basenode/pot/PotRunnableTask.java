@@ -4,17 +4,17 @@ import io.coti.basenode.data.TransactionData;
 import io.coti.pot.ProofOfTrust;
 
 public class PotRunnableTask implements Comparable<PotRunnableTask>, Runnable {
+
     private byte[] targetDifficulty;
-    private TransactionData transactionData;
-
-    public int getPriority() {
-        return this.transactionData.getRoundedSenderTrustScore();
-    }
-
+    private final TransactionData transactionData;
 
     public PotRunnableTask(TransactionData transactionData, byte[] targetDifficulty) {
         this.transactionData = transactionData;
         this.targetDifficulty = targetDifficulty;
+    }
+
+    public int getPriority() {
+        return this.transactionData.getRoundedSenderTrustScore();
     }
 
     @Override
@@ -36,5 +36,17 @@ public class PotRunnableTask implements Comparable<PotRunnableTask>, Runnable {
     @Override
     public int compareTo(PotRunnableTask other) {
         return Double.compare(this.getPriority(), other.getPriority());
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == this) {
+            return true;
+        }
+
+        if (!(o instanceof PotRunnableTask)) {
+            return false;
+        }
+        return this.getPriority() == ((PotRunnableTask) o).getPriority();
     }
 }

@@ -12,9 +12,9 @@ import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class WebShutDown implements TomcatConnectorCustomizer {
-    private static final int TIMEOUT = 180;
 
-    private volatile Connector connector;
+    private static final int TIMEOUT = 180;
+    private Connector connector;
 
     @Override
     public void customize(Connector connector) {

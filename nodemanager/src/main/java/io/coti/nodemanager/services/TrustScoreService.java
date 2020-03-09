@@ -30,14 +30,12 @@ import java.util.stream.Collectors;
 public class TrustScoreService implements ITrustScoreService {
 
     private static final String GET_TRUSTSCORE_ENDPOINT = "/usertrustscore";
-
     private static final int NUM_OF_TRUSTSCORE_NODES = 3;
     public static final String TRUSTSCORE_DATA_ENDPOINT = "/trustscore_data";
     public static final String TRUSTSCORE_AGGREGATION_DATA_ENDPOINT = "/trustscore_aggregation_data";
     @Value("${global.private.key}")
     private String globalPrivateKey;
     private final RestTemplate httpRequest;
-
     private final NodeTrustScoreRequestCrypto trustScoreRequestCrypto;
 
     @Autowired
@@ -49,7 +47,7 @@ public class TrustScoreService implements ITrustScoreService {
     @Override
     public Double getTrustScore(NetworkNodeData networkNodeData, List<NetworkNodeData> trustScoreNodeList) {
         GetTrustScoreRequest getTrustScoreRequest = new GetTrustScoreRequest();
-        getTrustScoreRequest.userHash = networkNodeData.getNodeHash();
+        getTrustScoreRequest.setUserHash(networkNodeData.getNodeHash());
         ResponseEntity<Object> trustScoreResponse = null;
         for (NetworkNodeData trustScoreNode : trustScoreNodeList) {
             try {
@@ -105,8 +103,7 @@ public class TrustScoreService implements ITrustScoreService {
     }
 
     private Map<Hash, NetworkNodeData> createNodeMapFromList(List<NetworkNodeData> networkNodeData) {
-        Map<Hash, NetworkNodeData> ans = networkNodeData.stream().collect(Collectors.toMap(x -> x.getHash(), x -> x));
-        return ans;
+        return networkNodeData.stream().collect(Collectors.toMap(NetworkNodeData::getHash, x -> x));
     }
 
     private NodeTrustScoreResponse sendTrustScoreRequestToFirstTrustScoreNode(NetworkNodeData firstTrustScoreNode, NodeTrustScoreRequest nodeTrustScoreRequest) {
@@ -183,8 +180,7 @@ public class TrustScoreService implements ITrustScoreService {
 
     private List<NetworkNodeData> chooseTrustScoreNodesFromList(List<NetworkNodeData> trustScoreNodeList) {
         Collections.shuffle(trustScoreNodeList);
-        List<NetworkNodeData> trustScoreNodesToSend = trustScoreNodeList.stream().limit(NUM_OF_TRUSTSCORE_NODES).collect(Collectors.toList());
-        return trustScoreNodesToSend;
+        return trustScoreNodeList.stream().limit(NUM_OF_TRUSTSCORE_NODES).collect(Collectors.toList());
     }
 
 }

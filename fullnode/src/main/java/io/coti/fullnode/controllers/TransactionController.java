@@ -3,27 +3,28 @@ package io.coti.fullnode.controllers;
 import io.coti.basenode.http.Response;
 import io.coti.basenode.http.interfaces.IResponse;
 import io.coti.basenode.services.TransactionIndexService;
-import io.coti.fullnode.http.AddTransactionRequest;
-import io.coti.fullnode.http.AddressRequest;
-import io.coti.fullnode.http.GetAddressTransactionBatchRequest;
-import io.coti.fullnode.http.GetTransactionRequest;
+import io.coti.fullnode.http.*;
 import io.coti.fullnode.services.TransactionService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletResponse;
 import javax.validation.Valid;
+import javax.validation.constraints.Positive;
+
+import static io.coti.fullnode.http.HttpStringConstants.EXPLORER_TRANSACTION_PAGE_INVALID;
 
 @Slf4j
 @RestController
 @RequestMapping("/transaction")
+@Validated
 public class TransactionController {
 
     @Autowired
     private TransactionService transactionService;
-
     @Autowired
     private TransactionIndexService transactionIndexService;
 
@@ -32,9 +33,19 @@ public class TransactionController {
         return transactionService.addNewTransaction(addTransactionRequest);
     }
 
+    @PostMapping(value = "/repropagate")
+    public ResponseEntity<IResponse> repropagateTransaction(@Valid @RequestBody RepropagateTransactionRequest repropagateTransactionRequest) {
+        return transactionService.repropagateTransaction(repropagateTransactionRequest);
+    }
+
     @PostMapping()
     public ResponseEntity<IResponse> getTransactionDetails(@Valid @RequestBody GetTransactionRequest getTransactionRequest) {
-        return transactionService.getTransactionDetails(getTransactionRequest.transactionHash);
+        return transactionService.getTransactionDetails(getTransactionRequest.getTransactionHash());
+    }
+
+    @PostMapping(value = "/multiple")
+    public void getTransactions(@Valid @RequestBody GetTransactionsRequest getTransactionsRequest, HttpServletResponse response) {
+        transactionService.getTransactions(getTransactionsRequest, response);
     }
 
     @PostMapping(value = "/addressTransactions")
@@ -44,12 +55,27 @@ public class TransactionController {
 
     @PostMapping(value = "/addressTransactions/batch")
     public void getAddressTransactionBatch(@Valid @RequestBody GetAddressTransactionBatchRequest getAddressTransactionBatchRequest, HttpServletResponse response) {
-        transactionService.getAddressTransactionBatch(getAddressTransactionBatchRequest, response);
+        transactionService.getAddressTransactionBatch(getAddressTransactionBatchRequest, response, false);
+    }
+
+    @PostMapping(value = "/addressTransactions/reduced/batch")
+    public void getAddressReducedTransactionBatch(@Valid @RequestBody GetAddressTransactionBatchRequest getAddressTransactionBatchRequest, HttpServletResponse response) {
+        transactionService.getAddressTransactionBatch(getAddressTransactionBatchRequest, response, true);
     }
 
     @GetMapping(value = "/lastTransactions")
     public ResponseEntity<IResponse> getLastTransactions() {
         return transactionService.getLastTransactions();
+    }
+
+    @GetMapping(value = "/total")
+    public ResponseEntity<IResponse> getTotalTransactions() {
+        return transactionService.getTotalTransactions();
+    }
+
+    @GetMapping()
+    public ResponseEntity<IResponse> getTransactionsByPage(@RequestParam @Positive(message = EXPLORER_TRANSACTION_PAGE_INVALID) int page) {
+        return transactionService.getTransactionsByPage(page);
     }
 
     @GetMapping(value = "/index")

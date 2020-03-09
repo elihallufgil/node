@@ -12,9 +12,10 @@ import static javax.xml.bind.DatatypeConverter.parseHexBinary;
 @Slf4j
 @Service
 public class BaseNodePotService implements IPotService {
+
     @Value("${network.difficulty}")
     protected String difficulty;
-    protected static byte[] targetDifficulty;
+    protected byte[] targetDifficulty;
 
     public void init() {
         targetDifficulty = parseHexBinary(difficulty);
@@ -25,8 +26,7 @@ public class BaseNodePotService implements IPotService {
     public boolean validatePot(TransactionData transactionData) {
         ProofOfTrust pot = new ProofOfTrust(
                 transactionData.getRoundedSenderTrustScore());
-        boolean valid = pot.verify(transactionData.getHash().
+        return pot.verify(transactionData.getHash().
                 getBytes(), transactionData.getNonces(), targetDifficulty);
-        return valid;
     }
 }

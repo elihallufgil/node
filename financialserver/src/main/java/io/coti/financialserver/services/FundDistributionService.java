@@ -4,6 +4,7 @@ import io.coti.basenode.crypto.CryptoHelper;
 import io.coti.basenode.crypto.NodeCryptoHelper;
 import io.coti.basenode.data.Hash;
 import io.coti.basenode.data.SignatureData;
+import io.coti.basenode.exceptions.CotiRunTimeException;
 import io.coti.basenode.http.Response;
 import io.coti.basenode.http.interfaces.IResponse;
 import io.coti.basenode.services.BaseNodeBalanceService;
@@ -46,7 +47,6 @@ public class FundDistributionService {
     private static final String DAILY_DISTRIBUTION_RESULT_FILE_PREFIX = "distribution_results_";
     private static final String DAILY_DISTRIBUTION_RESULT_FILE_SUFFIX = ".csv";
     private static final String COMMA_SEPARATOR = ",";
-
     @Value("${financialserver.seed}")
     private String seed;
     @Value("${kycserver.public.key}")
@@ -155,10 +155,7 @@ public class FundDistributionService {
             return distributionFileVerificationResponse;
         }
 
-        ResponseEntity<IResponse> responseEntity = updateWithTransactionsEntriesFromVerifiedFile(fundDistributionFileDataEntries, new AtomicLong(0), new AtomicLong(0));
-
-        return responseEntity;
-
+        return updateWithTransactionsEntriesFromVerifiedFile(fundDistributionFileDataEntries, new AtomicLong(0), new AtomicLong(0));
     }
 
     public ResponseEntity<IResponse> distributeFundFromFile(AddFundDistributionsRequest request) {
@@ -240,24 +237,26 @@ public class FundDistributionService {
     }
 
     private ResponseEntity<IResponse> verifyDailyDistributionLocalFileByName(List<FundDistributionData> fundDistributionFileDataEntries, FundDistributionFileData fundDistributionFileData, String fileName) {
-        ResponseEntity<IResponse> responseEntityForFileHandling = handleFundDistributionFile(fundDistributionFileData, fileName, fundDistributionFileDataEntries);
-        if (responseEntityForFileHandling != null) {
-            return responseEntityForFileHandling;
-        }
-        if (fundDistributionFileData.getUserSignature() == null || !fundDistributionFileCrypto.verifySignature(fundDistributionFileData)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new Response(INVALID_SIGNATURE, STATUS_ERROR));
-        }
-        return null;
+        return getResponseEntityForFileHandling(fundDistributionFileDataEntries, fundDistributionFileData, fileName);
     }
 
     private ResponseEntity<IResponse> verifyDailyDistributionFileByName(List<FundDistributionData> fundDistributionFileDataEntries, FundDistributionFileData fundDistributionFileData, String fileName) {
         try {
             awsService.downloadFundDistributionFile(fileName);
-        } catch (IOException e) {
-            log.error(CANT_SAVE_FILE_ON_DISK, e);
+        } catch (CotiRunTimeException e) {
+            log.error(CANT_SAVE_FILE_ON_DISK);
+            e.logMessage();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new Response(CANT_SAVE_FILE_ON_DISK, STATUS_ERROR));
+        } catch (Exception e) {
+            log.error(CANT_SAVE_FILE_ON_DISK);
+            log.error("{}: {}", e.getClass().getName(), e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new Response(CANT_SAVE_FILE_ON_DISK, STATUS_ERROR));
         }
 
+        return getResponseEntityForFileHandling(fundDistributionFileDataEntries, fundDistributionFileData, fileName);
+    }
+
+    private ResponseEntity<IResponse> getResponseEntityForFileHandling(List<FundDistributionData> fundDistributionFileDataEntries, FundDistributionFileData fundDistributionFileData, String fileName) {
         ResponseEntity<IResponse> responseEntityForFileHandling = handleFundDistributionFile(fundDistributionFileData, fileName, fundDistributionFileDataEntries);
         if (responseEntityForFileHandling != null) {
             return responseEntityForFileHandling;
@@ -296,7 +295,7 @@ public class FundDistributionService {
                 }
             }
         } catch (Exception e) {
-            log.error("Errors on distribution funds service: {}", e);
+            log.error("Errors on distribution funds service: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.EXPECTATION_FAILED).body(new Response(line, BAD_CSV_FILE_LINE_FORMAT));
         }
         return null;

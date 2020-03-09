@@ -1,5 +1,6 @@
 package io.coti.basenode.services;
 
+import io.coti.basenode.communication.ZeroMQSubscriberQueue;
 import io.coti.basenode.communication.interfaces.IPropagationSubscriber;
 import io.coti.basenode.services.interfaces.*;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 @Service
 public class BaseNodeMonitorService implements IMonitorService {
+
     @Autowired
     private ITransactionHelper transactionHelper;
     @Autowired
@@ -23,7 +25,6 @@ public class BaseNodeMonitorService implements IMonitorService {
     private ITransactionService transactionService;
     @Autowired
     private IPropagationSubscriber propagationSubscriber;
-
     @Value("${allow.transaction.monitoring}")
     private boolean allowTransactionMonitoring;
 
@@ -42,7 +43,7 @@ public class BaseNodeMonitorService implements IMonitorService {
                     transactionIndexService.getLastTransactionIndexData().getIndex(),
                     clusterService.getTotalSources(),
                     transactionService.totalPostponedTransactions(),
-                    propagationSubscriber.getMessageQueueSize());
+                    propagationSubscriber.getMessageQueueSize(ZeroMQSubscriberQueue.TRANSACTION));
         }
     }
 }

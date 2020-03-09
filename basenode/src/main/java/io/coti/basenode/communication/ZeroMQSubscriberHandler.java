@@ -17,6 +17,7 @@ import java.util.function.Function;
 
 @Component
 public class ZeroMQSubscriberHandler implements ISubscriberHandler {
+
     private Map<String, Function<NodeType, Consumer<Object>>> messageTypeToSubscriberHandlerMap;
     @Autowired
     private ITransactionService transactionService;
@@ -32,7 +33,7 @@ public class ZeroMQSubscriberHandler implements ISubscriberHandler {
         messageTypeToSubscriberHandlerMap = new HashMap<>();
         EnumSet.allOf(SubscriberMessageType.class).forEach(subscriberMessageType -> {
             injectSubscriberMessageHandleServices(subscriberMessageType);
-            messageTypeToSubscriberHandlerMap.put(subscriberMessageType.toString(), publisherNodeType -> subscriberMessageType.getHandler(publisherNodeType));
+            messageTypeToSubscriberHandlerMap.put(subscriberMessageType.getMessageTypeClass().getSimpleName(), subscriberMessageType::getHandler);
         });
     }
 
