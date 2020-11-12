@@ -1,11 +1,15 @@
 package io.coti.fullnode.http;
 
 import io.coti.basenode.data.Hash;
-import io.coti.basenode.http.Request;
+import io.coti.basenode.http.interfaces.IRequest;
+import lombok.Data;
 
+import javax.validation.Valid;
 import javax.validation.constraints.NotNull;
 
-public class GetTransactionRequest extends Request {
+@Data
+public class GetTransactionRequest implements IRequest {
+
     @NotNull(message = "Transaction hash must not be blank")
-    public Hash transactionHash;
+    private @Valid Hash transactionHash;
 }

@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.util.EnumSet;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -22,24 +22,21 @@ public class DistributionService {
     public static final int INITIAL_AMOUNT_FOR_INCENTIVES = 900000000;
     public static final int INITIAL_AMOUNT_FOR_TEAM = 300000000;
     public static final int INITIAL_AMOUNT_FOR_ADVISORS = 200000000;
-
     @Value("${financialserver.seed}")
     private String seed;
     @Autowired
     private InitialFunds initialFunds;
     @Autowired
     private TransactionCreationService transactionCreationService;
-    @Autowired
-    private NodeCryptoHelper nodeCryptoHelper;
 
     public void distributeToInitialFunds() {
-        Hash cotiGenesisAddress = nodeCryptoHelper.generateAddress(seed, COTI_GENESIS_ADDRESS_INDEX);
-        EnumSet<ReservedAddress> initialFundDistributionAddresses = ReservedAddress.getInitialFundDistributionAddresses();
-        initialFundDistributionAddresses.forEach(addressIndex -> {
-            Hash fundAddress = nodeCryptoHelper.generateAddress(seed, Math.toIntExact(addressIndex.getIndex()));
+        Hash cotiGenesisAddress = NodeCryptoHelper.generateAddress(seed, COTI_GENESIS_ADDRESS_INDEX);
+        Set<ReservedAddress> initialFundDistributionAddresses = ReservedAddress.getInitialFundDistributionAddresses();
+        initialFundDistributionAddresses.forEach(initialFundDistributionAddress -> {
+            Hash fundAddress = NodeCryptoHelper.generateAddress(seed, Math.toIntExact(initialFundDistributionAddress.getIndex()));
 
             if (!isInitialTransactionExistsByAddress(fundAddress)) {
-                BigDecimal amount = getInitialAmountByAddressIndex(addressIndex);
+                BigDecimal amount = getInitialAmountByReservedAddress(initialFundDistributionAddress);
                 Hash initialTransactionHash;
                 try {
                     initialTransactionHash = transactionCreationService.createInitialTransactionToFund(amount, cotiGenesisAddress, fundAddress, COTI_GENESIS_ADDRESS_INDEX);
@@ -58,10 +55,10 @@ public class DistributionService {
         return initialFunds.getByHash(fundAddress) != null;
     }
 
-    private BigDecimal getInitialAmountByAddressIndex(ReservedAddress addressIndex) {
+    private BigDecimal getInitialAmountByReservedAddress(ReservedAddress reservedAddress) {
         BigDecimal amount = BigDecimal.ZERO;
-        if (addressIndex.isInitialFundDistribution()) {
-            switch (addressIndex) {
+        if (reservedAddress.isInitialFundDistribution()) {
+            switch (reservedAddress) {
                 case TOKEN_SALE:
                     amount = new BigDecimal(INITIAL_AMOUNT_FOR_TOKEN_SALE);
                     break;
@@ -73,6 +70,8 @@ public class DistributionService {
                     break;
                 case ADVISORS:
                     amount = new BigDecimal(INITIAL_AMOUNT_FOR_ADVISORS);
+                    break;
+                default:
                     break;
             }
         }

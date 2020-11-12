@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import java.nio.ByteBuffer;
 
 @Component
-public class GetNodeRegistrationRequestCrypto extends SignatureCreationCrypto<GetNodeRegistrationRequest> {
+public class GetNodeRegistrationRequestCrypto implements SignatureCreationCrypto<GetNodeRegistrationRequest> {
 
     @Override
     public byte[] getSignatureMessage(GetNodeRegistrationRequest getNodeRegistrationRequest) {
@@ -16,7 +16,6 @@ public class GetNodeRegistrationRequestCrypto extends SignatureCreationCrypto<Ge
         ByteBuffer nodeRegistrationBuffer = ByteBuffer.allocate(nodeTypeInBytes.length + networkTypeInBytes.length).put(nodeTypeInBytes).put(networkTypeInBytes);
         return CryptoHelper.cryptoHash(nodeRegistrationBuffer.array()).getBytes();
     }
-
 
 }
 

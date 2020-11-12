@@ -10,7 +10,7 @@ import io.coti.basenode.data.TransactionData;
 import io.coti.basenode.http.GetMerchantRollingReserveAddressRequest;
 import io.coti.basenode.http.GetMerchantRollingReserveAddressResponse;
 import io.coti.basenode.http.Response;
-import io.coti.basenode.http.SeriazableResponse;
+import io.coti.basenode.http.SerializableResponse;
 import io.coti.basenode.http.interfaces.IResponse;
 import io.coti.basenode.model.Transactions;
 import io.coti.basenode.services.interfaces.ITransactionHelper;
@@ -86,7 +86,7 @@ public class RollingReserveService {
         return lastAddressIndex.incrementAndGet();
     }
 
-    public ResponseEntity getRollingReserveData(GetMerchantRollingReserveDataRequest request) {
+    public ResponseEntity<IResponse> getRollingReserveData(GetMerchantRollingReserveDataRequest request) {
 
         RollingReserveReleaseDateData rollingReserveReleaseDateData;
         RollingReserveReleaseStatus rollingReserveReleaseStatus;
@@ -120,7 +120,7 @@ public class RollingReserveService {
             createRollingReserveDataForMerchant(merchantHash);
             merchantRollingReserveData = merchantRollingReserves.getByHash(merchantHash);
             propagationPublisher.propagate(new MerchantRollingReserveAddressData(merchantRollingReserveData.getHash(), merchantRollingReserveData.getRollingReserveAddress()),
-                    Arrays.asList(NodeType.TrustScoreNode));
+                    Collections.singletonList(NodeType.TrustScoreNode));
         }
         return merchantRollingReserveData;
     }
@@ -128,14 +128,14 @@ public class RollingReserveService {
     public ResponseEntity<IResponse> getMerchantRollingReserveAddress(GetMerchantRollingReserveAddressRequest request) {
 
         if (!getMerchantRollingReserveAddressCrypto.verifySignature(request)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new SeriazableResponse(UNAUTHORIZED, STATUS_ERROR));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new SerializableResponse(UNAUTHORIZED, STATUS_ERROR));
         }
 
         MerchantRollingReserveData merchantRollingReserveData = getMerchantRollingReserveData(request.getMerchantHash());
         return ResponseEntity.status(HttpStatus.OK).body(new GetMerchantRollingReserveAddressResponse(merchantRollingReserveData.getMerchantHash(), merchantRollingReserveData.getRollingReserveAddress()));
     }
 
-    public ResponseEntity recourseClaim(RecourseClaimRequest request) {
+    public ResponseEntity<IResponse> recourseClaim(RecourseClaimRequest request) {
 
         RecourseClaimData recourseClaimData = request.getRecourseClaimData();
         RecourseClaimCrypto recourseClaimCrypto = new RecourseClaimCrypto();
@@ -166,7 +166,7 @@ public class RollingReserveService {
 
         recourseClaimData = recourseClaims.getByHash(recourseClaimData.getMerchantHash());
 
-        if (recourseClaimData.getTransactionHashes().contains(transactionData)) {
+        if (recourseClaimData.getTransactionHashes().contains(transactionData.getHash())) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new Response(ALREADY_GOT_THIS_RECOURSE_CLAIM, STATUS_ERROR));
         }
 
@@ -184,7 +184,7 @@ public class RollingReserveService {
     public void setRollingReserveReleaseDate(TransactionData transactionData, Hash merchantHash) {
 
         try {
-            // TODO: Get number of days from transaction data
+            // Get number of days from transaction data
             Date date = DatesHelper.getDateNumberOfDaysAfterToday(ROLLING_RESERVE_DEFAULT_DAYS_TO_HOLD);
 
             Hash dateHash = new Hash(date.getTime());
@@ -220,8 +220,7 @@ public class RollingReserveService {
             log.info("Rolling reserve release date set success for transaction {} and merchant {}", transactionData.getHash(), merchantHash);
 
         } catch (Exception e) {
-            log.error("Rolling reserve release date set error for transaction {} and merchant {}", transactionData.getHash(), merchantHash);
-            e.printStackTrace();
+            log.error("Rolling reserve release date set error for transaction {} and merchant {}", transactionData.getHash(), merchantHash, e);
         }
     }
 
@@ -278,7 +277,7 @@ public class RollingReserveService {
             recourseClaimData.getDisputeHashes().add(disputeData.getHash());
             recourseClaimData.setAmountToPay(recourseClaimData.getAmountToPay().add(remainingChargebackAmount));
 
-            propagationPublisher.propagate(recourseClaimData, Arrays.asList(NodeType.TrustScoreNode));
+            propagationPublisher.propagate(recourseClaimData, Collections.singletonList(NodeType.TrustScoreNode));
             recourseClaims.put(recourseClaimData);
         }
 
@@ -299,10 +298,10 @@ public class RollingReserveService {
 
     private void addConsumerToRollingReserveReceiver(RollingReserveReleaseStatus rollingReserveReleaseStatus) {
 
-        if (rollingReserveReleaseStatus.getRollingReserveReceiver() == RollingReserveReceiver.Merchant) {
-            rollingReserveReleaseStatus.setRollingReserveReceiver(RollingReserveReceiver.MerchantAndConsumer);
+        if (rollingReserveReleaseStatus.getRollingReserveReceiver() == RollingReserveReceiver.MERCHANT) {
+            rollingReserveReleaseStatus.setRollingReserveReceiver(RollingReserveReceiver.MERCHANT_AND_CONSUMER);
         } else {
-            rollingReserveReleaseStatus.setRollingReserveReceiver(RollingReserveReceiver.Consumer);
+            rollingReserveReleaseStatus.setRollingReserveReceiver(RollingReserveReceiver.CONSUMER);
         }
     }
 

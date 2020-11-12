@@ -9,10 +9,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
+import java.util.Collections;
 
 @Slf4j
 @Service
 public class AddressService extends BaseNodeAddressService {
+
     @Autowired
     private IPropagationPublisher propagationPublisher;
 
@@ -32,11 +34,12 @@ public class AddressService extends BaseNodeAddressService {
                 NodeType.TrustScoreNode,
                 NodeType.DspNode,
                 NodeType.ZeroSpendServer,
-                NodeType.FinancialServer));
+                NodeType.FinancialServer,
+                NodeType.HistoryNode));
     }
 
     @Override
     protected void continueHandleGeneratedAddress(AddressData addressData) {
-        propagationPublisher.propagate(addressData, Arrays.asList(NodeType.FullNode));
+        propagationPublisher.propagate(addressData, Collections.singletonList(NodeType.FullNode));
     }
 }

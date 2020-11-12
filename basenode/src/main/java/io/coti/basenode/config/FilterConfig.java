@@ -11,12 +11,13 @@ import java.util.HashSet;
 
 @Configuration
 public class FilterConfig {
+
     @Value("${whitelist.ips}")
     private String whitelistIps;
 
     @Bean
     public FilterRegistrationBean<AdminFilter> adminFilterRegistrationBean() {
-        FilterRegistrationBean<AdminFilter> registrationBean = new FilterRegistrationBean();
+        FilterRegistrationBean<AdminFilter> registrationBean = new FilterRegistrationBean<>();
         AdminFilter adminFilter = new AdminFilter();
         adminFilter.setWhiteListIps(new HashSet<>(Arrays.asList(whitelistIps.split(","))));
         registrationBean.setFilter(adminFilter);

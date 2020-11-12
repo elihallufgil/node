@@ -1,26 +1,26 @@
 package io.coti.fullnode.services;
 
+import com.dictiography.collections.IndexedNavigableSet;
+import com.dictiography.collections.IndexedTreeSet;
 import io.coti.basenode.crypto.TransactionCrypto;
-import io.coti.basenode.data.AddressTransactionsHistory;
-import io.coti.basenode.data.Hash;
-import io.coti.basenode.data.TransactionData;
+import io.coti.basenode.data.*;
+import io.coti.basenode.exceptions.PotException;
 import io.coti.basenode.exceptions.TransactionException;
 import io.coti.basenode.exceptions.TransactionValidationException;
 import io.coti.basenode.http.CustomGson;
 import io.coti.basenode.http.GetTransactionsResponse;
 import io.coti.basenode.http.Response;
+import io.coti.basenode.http.data.ReducedTransactionResponseData;
 import io.coti.basenode.http.data.TransactionResponseData;
 import io.coti.basenode.http.data.TransactionStatus;
+import io.coti.basenode.http.data.interfaces.ITransactionResponseData;
 import io.coti.basenode.http.interfaces.IResponse;
 import io.coti.basenode.model.AddressTransactionsHistories;
 import io.coti.basenode.model.Transactions;
 import io.coti.basenode.services.BaseNodeTransactionService;
-import io.coti.basenode.services.interfaces.IClusterService;
-import io.coti.basenode.services.interfaces.INetworkService;
-import io.coti.basenode.services.interfaces.ITransactionHelper;
-import io.coti.fullnode.data.ExplorerIndexData;
+import io.coti.basenode.services.interfaces.*;
+import io.coti.fullnode.crypto.ResendTransactionRequestCrypto;
 import io.coti.fullnode.http.*;
-import io.coti.fullnode.model.ExplorerIndexes;
 import io.coti.fullnode.websocket.WebSocketSender;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,18 +34,20 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static io.coti.basenode.http.BaseNodeHttpStringConstants.*;
+import static io.coti.fullnode.http.HttpStringConstants.EXPLORER_TRANSACTION_PAGE_ERROR;
 
 @Slf4j
 @Service
 public class TransactionService extends BaseNodeTransactionService {
 
-    private static final int EXPLORER_LAST_TRANSACTIONS_AMOUNT = 20;
-
-    private AtomicLong explorerIndex;
+    private static final int EXPLORER_LAST_TRANSACTIONS_NUMBER = 20;
+    private static final int EXPLORER_TRANSACTION_NUMBER_BY_PAGE = 10;
     @Autowired
     private ITransactionHelper transactionHelper;
     @Autowired
@@ -55,8 +57,6 @@ public class TransactionService extends BaseNodeTransactionService {
     @Autowired
     private IClusterService clusterService;
     @Autowired
-    private ExplorerIndexes explorerIndexes;
-    @Autowired
     private AddressTransactionsHistories addressTransactionHistories;
     @Autowired
     private Transactions transactions;
@@ -65,104 +65,146 @@ public class TransactionService extends BaseNodeTransactionService {
     @Autowired
     private INetworkService networkService;
     @Autowired
+    private IChunkService chunkService;
+    @Autowired
     private PotService potService;
+    @Autowired
+    protected ITransactionPropagationCheckService transactionPropagationCheckService;
+    private BlockingQueue<ExplorerTransactionData> explorerIndexQueue;
+    private IndexedNavigableSet<ExplorerTransactionData> explorerIndexedTransactionSet;
+    @Autowired
+    private ResendTransactionRequestCrypto resendTransactionRequestCrypto;
+    private final LockData transactionLockData = new LockData();
 
     @Override
     public void init() {
-        explorerIndex = new AtomicLong(0);
+        explorerIndexedTransactionSet = new IndexedTreeSet<>();
+        explorerIndexQueue = new LinkedBlockingQueue<>();
+        Thread explorerIndexThread = new Thread(this::updateExplorerIndex);
+        explorerIndexThread.start();
         super.init();
     }
 
     public ResponseEntity<Response> addNewTransaction(AddTransactionRequest request) {
         TransactionData transactionData =
                 new TransactionData(
-                        request.baseTransactions,
-                        request.hash,
-                        request.transactionDescription,
-                        request.trustScoreResults,
-                        request.createTime,
-                        request.senderHash,
-                        request.senderSignature,
-                        request.type);
+                        request.getBaseTransactions(),
+                        request.getHash(),
+                        request.getTransactionDescription(),
+                        request.getTrustScoreResults(),
+                        request.getCreateTime(),
+                        request.getSenderHash(),
+                        request.getSenderSignature(),
+                        request.getType());
         try {
-            log.debug("New transaction request is being processed. Transaction Hash = {}", request.hash);
-
-            if (transactionHelper.isTransactionExists(transactionData)) {
-                log.debug("Received existing transaction: {}", transactionData.getHash());
-                return ResponseEntity
-                        .status(HttpStatus.UNAUTHORIZED)
-                        .body(new AddTransactionResponse(
-                                STATUS_ERROR,
-                                TRANSACTION_ALREADY_EXIST_MESSAGE));
-            }
-            transactionHelper.startHandleTransaction(transactionData);
-
-            validateTransaction(transactionData);
-
-            selectSources(transactionData);
-            if (!transactionData.hasSources()) {
-                int selectSourceRetryCount = 0;
-                while (!transactionData.hasSources() && selectSourceRetryCount <= 20) {
-                    log.debug("Could not find sources for transaction: {}. Retrying in 5 seconds.", transactionData.getHash());
-                    TimeUnit.SECONDS.sleep(5);
-                    selectSources(transactionData);
-                    selectSourceRetryCount++;
-                }
-                if (!transactionData.hasSources()) {
-                    log.info("No source found for transaction {} with trust score {}", transactionData.getHash(), transactionData.getSenderTrustScore());
+            log.debug("New transaction request is being processed. Transaction Hash = {}", request.getHash());
+            synchronized (transactionLockData.addLockToLockMap(transactionData.getHash())) {
+                if (transactionHelper.isTransactionExists(transactionData)) {
+                    log.debug("Received existing transaction: {}", transactionData.getHash());
                     return ResponseEntity
-                            .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(new AddTransactionResponse(
-                                    STATUS_ERROR,
-                                    TRANSACTION_SOURCE_NOT_FOUND));
+                            .status(HttpStatus.UNAUTHORIZED)
+                            .body(new Response(
+                                    TRANSACTION_ALREADY_EXIST_MESSAGE, STATUS_ERROR));
                 }
-            }
-            if (!validationService.validateSource(transactionData.getLeftParentHash()) ||
-                    !validationService.validateSource(transactionData.getRightParentHash())) {
-                log.debug("Could not validate transaction source");
-            }
+                transactionHelper.startHandleTransaction(transactionData);
 
-            // ############   POT   ###########
-            try {
-                potService.potAction(transactionData);
-            } catch (IllegalArgumentException e) {
-                log.error("Error at POT: {} , Transaction: {}", e.getMessage(), transactionData.getHash());
+                validateTransaction(transactionData);
+
+                selectSources(transactionData);
+                if (!transactionData.hasSources()) {
+                    int selectSourceRetryCount = 0;
+                    while (!transactionData.hasSources() && selectSourceRetryCount <= 20) {
+                        log.debug("Could not find sources for transaction: {}. Retrying in 5 seconds.", transactionData.getHash());
+                        TimeUnit.SECONDS.sleep(5);
+                        selectSources(transactionData);
+                        selectSourceRetryCount++;
+                    }
+                    if (!transactionData.hasSources()) {
+                        log.info("No source found for transaction {} with trust score {}", transactionData.getHash(), transactionData.getSenderTrustScore());
+                        return ResponseEntity
+                                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                .body(new Response(
+                                        TRANSACTION_SOURCE_NOT_FOUND, STATUS_ERROR));
+                    }
+                }
+                if (!validationService.validateSource(transactionData.getLeftParentHash()) ||
+                        !validationService.validateSource(transactionData.getRightParentHash())) {
+                    log.debug("Could not validate transaction source");
+                }
+
+                // ############   POT   ###########
+                potAction(transactionData);
+                // ################################
+
+                transactionData.setAttachmentTime(Instant.now());
+                transactionCrypto.signMessage(transactionData);
+                transactionHelper.attachTransactionToCluster(transactionData);
+                transactionHelper.setTransactionStateToSaved(transactionData);
+                webSocketSender.notifyTransactionHistoryChange(transactionData, TransactionStatus.ATTACHED_TO_DAG);
+                addToExplorerIndexes(transactionData);
+                ((NetworkService) networkService).sendDataToConnectedDspNodes(transactionData);
+                transactionPropagationCheckService.addNewUnconfirmedTransaction(transactionData.getHash());
+                transactionHelper.setTransactionStateToFinished(transactionData);
                 return ResponseEntity
-                        .status(HttpStatus.UNAUTHORIZED)
+                        .status(HttpStatus.CREATED)
                         .body(new AddTransactionResponse(
-                                STATUS_ERROR,
-                                e.getMessage()));
+                                TRANSACTION_CREATED_MESSAGE, transactionData.getAttachmentTime()));
             }
-            // ################################
-
-            transactionData.setAttachmentTime(Instant.now());
-            transactionCrypto.signMessage(transactionData);
-            transactionHelper.attachTransactionToCluster(transactionData);
-            transactionHelper.setTransactionStateToSaved(transactionData);
-            webSocketSender.notifyTransactionHistoryChange(transactionData, TransactionStatus.ATTACHED_TO_DAG);
-            addToExplorerIndexes(transactionData);
-            final TransactionData finalTransactionData = transactionData;
-            ((NetworkService) networkService).sendDataToConnectedDspNodes(finalTransactionData);
-            transactionHelper.setTransactionStateToFinished(transactionData);
-            return ResponseEntity
-                    .status(HttpStatus.CREATED)
-                    .body(new AddTransactionResponse(
-                            STATUS_SUCCESS,
-                            TRANSACTION_CREATED_MESSAGE));
-
         } catch (TransactionValidationException e) {
             log.error("Transaction validation failed: {}", e.getMessage());
             return ResponseEntity
                     .status(HttpStatus.UNAUTHORIZED)
-                    .body(new AddTransactionResponse(
-                            STATUS_ERROR,
-                            e.getMessage()));
+                    .body(new Response(e.getMessage(), STATUS_ERROR));
+        } catch (PotException e) {
+            e.logMessage();
+            return ResponseEntity
+                    .status(HttpStatus.UNAUTHORIZED)
+                    .body(new Response(e.getMessage() + " Cause: " + e.getCause().getMessage(), STATUS_ERROR));
         } catch (Exception e) {
             log.error("Exception while adding transaction: {}", transactionData.getHash());
             throw new TransactionException(e);
         } finally {
             transactionHelper.endHandleTransaction(transactionData);
+            transactionLockData.removeLockFromLocksMap(transactionData.getHash());
         }
+    }
+
+    private void potAction(TransactionData transactionData) {
+        try {
+            potService.potAction(transactionData);
+        } catch (Exception e) {
+            throw new PotException("Error at POT for transaction: " + transactionData.getHash(), e);
+        }
+    }
+
+    public ResponseEntity<IResponse> repropagateTransaction(RepropagateTransactionRequest request) {
+
+        if (!resendTransactionRequestCrypto.verifySignature(request)) {
+            log.error("Signature validation failed for the request to resend transaction {}", request.getTransactionHash());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new Response(TRANSACTION_RESENT_INVALID_SIGNATURE_MESSAGE, STATUS_ERROR));
+        }
+        TransactionData transactionData = transactions.getByHash(request.getTransactionHash());
+        if (transactionData == null) {
+            log.error("Transaction {} requested to resend is not available in the database", request.getTransactionHash());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new Response(TRANSACTION_RESENT_NOT_AVAILABLE_MESSAGE, STATUS_ERROR));
+        }
+        if (!request.getSignerHash().equals(transactionData.getSenderHash())) {
+            log.error("Transaction {} is requested to resend not by the transaction sender", request.getTransactionHash());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(new Response(TRANSACTION_RESENT_NOT_ALLOWED_MESSAGE, STATUS_ERROR));
+        }
+        if (transactionHelper.isTransactionHashProcessing(request.getTransactionHash())) {
+            log.error("Transaction {} requested to resend is still being processed", request.getTransactionHash());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(new Response(TRANSACTION_RESENT_PROCESSING_MESSAGE, STATUS_ERROR));
+        }
+
+        ((NetworkService) networkService).sendDataToConnectedDspNodes(transactionData);
+
+        return ResponseEntity.status(HttpStatus.OK)
+                .body(new Response(TRANSACTION_RESENT_MESSAGE));
     }
 
     public void selectSources(TransactionData transactionData) {
@@ -230,6 +272,22 @@ public class TransactionService extends BaseNodeTransactionService {
 
     }
 
+    public void getTransactions(GetTransactionsRequest getTransactionsRequest, HttpServletResponse response) {
+        try {
+            List<Hash> transactionHashes = getTransactionsRequest.getTransactionHashes();
+            PrintWriter output = response.getWriter();
+            chunkService.startOfChunk(output);
+            AtomicBoolean firstTransactionSent = new AtomicBoolean(false);
+            transactionHashes.forEach(transactionHash ->
+                    sendTransactionResponse(transactionHash, firstTransactionSent, output)
+            );
+
+            chunkService.endOfChunk(output);
+        } catch (Exception e) {
+            log.error("{}: {}", e.getClass().getName(), e.getMessage());
+        }
+    }
+
     public ResponseEntity<IResponse> getAddressTransactions(Hash addressHash) {
         List<TransactionData> transactionsDataList = new ArrayList<>();
         AddressTransactionsHistory addressTransactionsHistory = addressTransactionHistories.getByHash(addressHash);
@@ -252,57 +310,59 @@ public class TransactionService extends BaseNodeTransactionService {
         }
     }
 
-    public void getAddressTransactionBatch(GetAddressTransactionBatchRequest getAddressTransactionBatchRequest, HttpServletResponse response) {
+    public void getAddressTransactionBatch(GetAddressTransactionBatchRequest getAddressTransactionBatchRequest, HttpServletResponse response, boolean reduced) {
         try {
             List<Hash> addressHashList = getAddressTransactionBatchRequest.getAddresses();
             PrintWriter output = response.getWriter();
-            output.write("[");
-            output.flush();
+            chunkService.startOfChunk(output);
 
-            Iterator<Hash> addressHashIterator = addressHashList.iterator();
-            boolean isPreviousAddressTransactionExist = false;
-            boolean isAddressTransactionExist;
-            while (addressHashIterator.hasNext()) {
-                isAddressTransactionExist = false;
-                Hash addressHash = addressHashIterator.next();
+            AtomicBoolean firstTransactionSent = new AtomicBoolean(false);
+            addressHashList.forEach(addressHash -> {
                 AddressTransactionsHistory addressTransactionsHistory = addressTransactionHistories.getByHash(addressHash);
                 if (addressTransactionsHistory != null) {
-                    Iterator<Hash> transactionHashIterator = addressTransactionsHistory.getTransactionsHistory().iterator();
-                    while (transactionHashIterator.hasNext()) {
-                        Hash transactionHash = transactionHashIterator.next();
-                        TransactionData transactionData = transactions.getByHash(transactionHash);
-                        if (transactionData != null) {
-                            if (isPreviousAddressTransactionExist || isAddressTransactionExist) {
-                                output.write(",");
-                                output.flush();
-                            }
-                            isAddressTransactionExist = true;
-                            output.write(new CustomGson().getInstance().toJson(new TransactionResponseData(transactionData)));
-                            output.flush();
-                        }
-                    }
+                    addressTransactionsHistory.getTransactionsHistory().forEach(transactionHash ->
+                            sendTransactionResponse(transactionHash, firstTransactionSent, output, addressHash, reduced)
+                    );
                 }
-                isPreviousAddressTransactionExist = isAddressTransactionExist ? isAddressTransactionExist : isPreviousAddressTransactionExist;
-            }
-            output.write("]");
-            output.flush();
+            });
+            chunkService.endOfChunk(output);
         } catch (Exception e) {
             log.error("Error sending address transaction batch");
             log.error(e.getMessage());
         }
     }
 
+    private void sendTransactionResponse(Hash transactionHash, AtomicBoolean firstTransactionSent, PrintWriter output) {
+        sendTransactionResponse(transactionHash, firstTransactionSent, output, null, false);
+    }
+
+    private void sendTransactionResponse(Hash transactionHash, AtomicBoolean firstTransactionSent, PrintWriter output, Hash addressHash, boolean reduced) {
+        try {
+            TransactionData transactionData = transactions.getByHash(transactionHash);
+            if (transactionData != null) {
+                ITransactionResponseData transactionResponseData = !reduced ? new TransactionResponseData(transactionData) : new ReducedTransactionResponseData(transactionData, addressHash);
+                if (firstTransactionSent.get()) {
+                    chunkService.sendChunk(",", output);
+                } else {
+                    firstTransactionSent.set(true);
+                }
+                chunkService.sendChunk(new CustomGson().getInstance().toJson(transactionResponseData), output);
+            }
+        } catch (Exception e) {
+            log.error("Error at transaction response data for {}", transactionHash.toString());
+            log.error(e.getMessage());
+        }
+    }
+
     public ResponseEntity<IResponse> getLastTransactions() {
         List<TransactionData> transactionsDataList = new ArrayList<>();
-        ExplorerIndexData explorerIndexData;
-        long currentExplorerIndex = explorerIndex.get();
+        Iterator<ExplorerTransactionData> iterator = explorerIndexedTransactionSet.descendingIterator();
+        int count = 0;
 
-        for (int i = 0; i < EXPLORER_LAST_TRANSACTIONS_AMOUNT; i++) {
-            if (currentExplorerIndex - i < 1) {
-                break;
-            }
-            explorerIndexData = explorerIndexes.getByHash(new Hash(currentExplorerIndex - i));
-            transactionsDataList.add(transactions.getByHash(explorerIndexData.getTransactionHash()));
+        while (count < EXPLORER_LAST_TRANSACTIONS_NUMBER && iterator.hasNext()) {
+            ExplorerTransactionData explorerTransactionData = iterator.next();
+            transactionsDataList.add(transactions.getByHash(explorerTransactionData.getTransactionHash()));
+            count++;
         }
 
         try {
@@ -315,6 +375,27 @@ public class TransactionService extends BaseNodeTransactionService {
                             ADDRESS_TRANSACTIONS_SERVER_ERROR,
                             STATUS_ERROR));
         }
+    }
+
+    public ResponseEntity<IResponse> getTotalTransactions() {
+        return ResponseEntity.ok(new GetTotalTransactionsResponse(explorerIndexedTransactionSet.size()));
+    }
+
+    public ResponseEntity<IResponse> getTransactionsByPage(int page) {
+        int totalTransactionsNumber = explorerIndexedTransactionSet.size();
+        int index = totalTransactionsNumber - (page - 1) * EXPLORER_TRANSACTION_NUMBER_BY_PAGE;
+        if (index < 0) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new Response(EXPLORER_TRANSACTION_PAGE_ERROR, STATUS_ERROR));
+        }
+        List<TransactionData> transactionDataList = new ArrayList<>();
+        int endOfIndex = index - EXPLORER_TRANSACTION_NUMBER_BY_PAGE;
+        while (index > endOfIndex && index >= 0) {
+            TransactionData transactionData = transactions.getByHash(explorerIndexedTransactionSet.exact(index).getTransactionHash());
+            transactionDataList.add(transactionData);
+            index--;
+        }
+        return ResponseEntity.ok(new GetTransactionsResponse(transactionDataList));
+
     }
 
     public ResponseEntity<IResponse> getTransactionDetails(Hash transactionHash) {
@@ -339,13 +420,13 @@ public class TransactionService extends BaseNodeTransactionService {
         }
     }
 
-    private long incrementAndGetExplorerIndex() {
-        return explorerIndex.incrementAndGet();
-    }
-
     @Override
     public void addToExplorerIndexes(TransactionData transactionData) {
-        explorerIndexes.put(new ExplorerIndexData(incrementAndGetExplorerIndex(), transactionData.getHash()));
+        try {
+            explorerIndexQueue.put(new ExplorerTransactionData(transactionData));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
 
@@ -353,5 +434,23 @@ public class TransactionService extends BaseNodeTransactionService {
     protected void continueHandlePropagatedTransaction(TransactionData transactionData) {
         webSocketSender.notifyTransactionHistoryChange(transactionData, TransactionStatus.ATTACHED_TO_DAG);
         addToExplorerIndexes(transactionData);
+    }
+
+    private void updateExplorerIndex() {
+        while (!Thread.currentThread().isInterrupted()) {
+
+            try {
+                ExplorerTransactionData explorerTransactionData = explorerIndexQueue.take();
+                explorerIndexedTransactionSet.add(explorerTransactionData);
+                webSocketSender.notifyTotalTransactionsChange(explorerIndexedTransactionSet.size());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    @Override
+    public void removeTransactionHashFromUnconfirmed(TransactionData transactionData) {
+        transactionPropagationCheckService.removeTransactionHashFromUnconfirmed(transactionData.getHash());
     }
 }

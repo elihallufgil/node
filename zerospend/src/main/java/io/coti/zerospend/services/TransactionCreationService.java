@@ -24,6 +24,7 @@ import static io.coti.zerospend.data.ZeroSpendTransactionType.STARVATION;
 @Slf4j
 @Service
 public class TransactionCreationService {
+
     private static final int ZERO_SPEND_ADDRESS_INDEX = 0;
     @Autowired
     private TransactionHelper transactionHelper;
@@ -37,17 +38,15 @@ public class TransactionCreationService {
     private TransactionCryptoCreator transactionCryptoCreator;
     @Autowired
     private DspVoteService dspVoteService;
-    @Autowired
-    private NodeCryptoHelper nodeCryptoHelper;
     @Value("${zerospend.seed}")
     private String seed;
 
-    public String createNewStarvationZeroSpendTransaction(TransactionData transactionData) {
-        return createNewZeroSpendTransaction(transactionData, STARVATION);
+    public void createNewStarvationZeroSpendTransaction(TransactionData transactionData) {
+        createNewZeroSpendTransaction(transactionData, STARVATION);
     }
 
-    public void createNewGenesisZeroSpendTransaction(double trustscore) {
-        createZeroSpendTransaction(trustscore, GENESIS);
+    public void createNewGenesisZeroSpendTransaction(double trustScore) {
+        createZeroSpendTransaction(trustScore, GENESIS);
     }
 
     public String createNewZeroSpendTransaction(TransactionData incomingTransactionData, ZeroSpendTransactionType zeroSpendTransactionType) {
@@ -90,7 +89,7 @@ public class TransactionCreationService {
 
     private void sendTransactionToPublisher(TransactionData transactionData) {
         log.debug("Sending Zero Spend Transaction. transaction: Hash = {} , SenderTrustScore = {}", transactionData.getHash(), transactionData.getSenderTrustScore());
-        propagationPublisher.propagate(transactionData, Arrays.asList(NodeType.DspNode, NodeType.TrustScoreNode, NodeType.FinancialServer));
+        propagationPublisher.propagate(transactionData, Arrays.asList(NodeType.DspNode, NodeType.TrustScoreNode, NodeType.FinancialServer, NodeType.HistoryNode));
 
     }
 
@@ -115,13 +114,12 @@ public class TransactionCreationService {
     private TransactionData createZeroSpendTransactionData(double trustScore, ZeroSpendTransactionType description) {
         Map<Hash, Integer> addressHashToAddressIndexMap = new HashMap<>();
         List<BaseTransactionData> baseTransactions = new ArrayList<>();
-        Hash addressHash = nodeCryptoHelper.generateAddress(seed, ZERO_SPEND_ADDRESS_INDEX);
+        Hash addressHash = NodeCryptoHelper.generateAddress(seed, ZERO_SPEND_ADDRESS_INDEX);
         BaseTransactionData baseTransactionData = new InputBaseTransactionData(addressHash, BigDecimal.ZERO, Instant.now());
         addressHashToAddressIndexMap.put(addressHash, ZERO_SPEND_ADDRESS_INDEX);
         baseTransactions.add(baseTransactionData);
         TransactionData transactionData = new TransactionData(baseTransactions, description.name(), trustScore, Instant.now(), TransactionType.ZeroSpend);
         transactionData.setAttachmentTime(Instant.now());
-
 
         transactionCryptoCreator.signBaseTransactions(transactionData, addressHashToAddressIndexMap);
         transactionCrypto.signMessage(transactionData);

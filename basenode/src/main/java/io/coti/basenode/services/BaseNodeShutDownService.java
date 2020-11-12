@@ -2,6 +2,7 @@ package io.coti.basenode.services;
 
 import io.coti.basenode.communication.interfaces.IPropagationPublisher;
 import io.coti.basenode.communication.interfaces.IPropagationSubscriber;
+import io.coti.basenode.communication.interfaces.IReceiver;
 import io.coti.basenode.database.interfaces.IDatabaseConnector;
 import io.coti.basenode.services.interfaces.IConfirmationService;
 import io.coti.basenode.services.interfaces.IShutDownService;
@@ -12,12 +13,15 @@ import org.springframework.stereotype.Service;
 @Slf4j
 @Service
 public class BaseNodeShutDownService implements IShutDownService {
+
     @Autowired
     protected IConfirmationService confirmationService;
     @Autowired
     protected IPropagationPublisher propagationPublisher;
     @Autowired
     protected IPropagationSubscriber propagationSubscriber;
+    @Autowired
+    protected IReceiver receiver;
     @Autowired
     protected IDatabaseConnector databaseConnector;
 
@@ -26,6 +30,7 @@ public class BaseNodeShutDownService implements IShutDownService {
     }
 
     public void shutDownServices() {
+        receiver.shutdown();
         propagationSubscriber.shutdown();
         propagationPublisher.shutdown();
         confirmationService.shutdown();

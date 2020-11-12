@@ -5,7 +5,7 @@
     <parent>
         <artifactId>coti-node</artifactId>
         <groupId>io.coti</groupId>
-        <version>1.0.2-SNAPSHOT</version>
+        <version>1.5.0-SNAPSHOT</version>
     </parent>
 
 
@@ -16,7 +16,7 @@
         <dependency>
             <groupId>io.coti</groupId>
             <artifactId>basenode</artifactId>
-            <version>1.0.2-SNAPSHOT</version>
+            <version>1.5.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -47,12 +47,6 @@
             <groupId>org.mariuszgromada.math</groupId>
             <artifactId>MathParser.org-mXparser</artifactId>
             <version>4.2.0</version>
-        </dependency>
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <version>4.12</version>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -90,6 +84,14 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <version>2.0.3.RELEASE</version>
+                <executions>
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

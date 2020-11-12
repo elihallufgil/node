@@ -16,8 +16,8 @@ import java.util.stream.Collectors;
 public class BucketNotFulfilmentEventsCalculator extends BucketCalculator {
 
     private static Map<UserType, CompensableEventsScore> userTypeToBehaviorEventsScoreMap;
-    private BucketNotFulfilmentEventsData bucketNotFulfilmentEventsData;
-    private CompensableEventScore compensableEventScore;
+    private final BucketNotFulfilmentEventsData bucketNotFulfilmentEventsData;
+    private final CompensableEventScore compensableEventScore;
 
     public BucketNotFulfilmentEventsCalculator(BucketNotFulfilmentEventsData bucketNotFulfilmentEventsData) {
         this.bucketNotFulfilmentEventsData = bucketNotFulfilmentEventsData;
@@ -27,7 +27,7 @@ public class BucketNotFulfilmentEventsCalculator extends BucketCalculator {
 
     public static void init(RulesData rulesData) {
         userTypeToBehaviorEventsScoreMap = rulesData.getUserTypeToUserScoreMap().entrySet().stream().
-                collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().getCompensableEventsScore()));
+                collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getCompensableEventsScore()));
     }
 
     @Override

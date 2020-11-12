@@ -1,8 +1,8 @@
 package io.coti.basenode.services;
 
 import com.google.common.collect.Sets;
+import io.coti.basenode.crypto.ExpandedTransactionTrustScoreCrypto;
 import io.coti.basenode.crypto.TransactionCrypto;
-import io.coti.basenode.crypto.TransactionTrustScoreCrypto;
 import io.coti.basenode.data.*;
 import io.coti.basenode.data.interfaces.ITrustScoreNodeValidatable;
 import io.coti.basenode.model.AddressTransactionsHistories;
@@ -12,7 +12,6 @@ import io.coti.basenode.services.interfaces.IBalanceService;
 import io.coti.basenode.services.interfaces.IClusterService;
 import io.coti.basenode.services.interfaces.IConfirmationService;
 import io.coti.basenode.services.interfaces.ITransactionHelper;
-import io.coti.basenode.services.liveview.LiveViewService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -31,6 +30,7 @@ import static io.coti.basenode.data.TransactionState.*;
 @Service
 public class TransactionHelper implements ITransactionHelper {
 
+    public static final int CURRENCY_SCALE = 8;
     @Autowired
     private AddressTransactionsHistories addressTransactionsHistories;
     @Autowired
@@ -46,11 +46,9 @@ public class TransactionHelper implements ITransactionHelper {
     @Autowired
     private TransactionIndexes transactionIndexes;
     @Autowired
-    private TransactionTrustScoreCrypto transactionTrustScoreCrypto;
-    @Autowired
-    private LiveViewService liveViewService;
+    private ExpandedTransactionTrustScoreCrypto expandedTransactionTrustScoreCrypto;
     private Map<Hash, Stack<TransactionState>> transactionHashToTransactionStateStackMapping;
-    private AtomicLong totalTransactions = new AtomicLong(0);
+    private final AtomicLong totalTransactions = new AtomicLong(0);
     private Set<Hash> noneIndexedTransactionHashes;
 
     @PostConstruct
@@ -94,11 +92,9 @@ public class TransactionHelper implements ITransactionHelper {
     @Override
     public void updateAddressTransactionHistory(TransactionData transactionData) {
         transactionData.getBaseTransactions().forEach(baseTransactionData -> {
-            AddressTransactionsHistory addressHistory = addressTransactionsHistories.getByHash(baseTransactionData.getAddressHash());
+            AddressTransactionsHistory addressHistory = Optional.ofNullable(addressTransactionsHistories.getByHash(baseTransactionData.getAddressHash()))
+                    .orElse(new AddressTransactionsHistory(baseTransactionData.getAddressHash()));
 
-            if (addressHistory == null) {
-                addressHistory = new AddressTransactionsHistory(baseTransactionData.getAddressHash());
-            }
             if (!addressHistory.addTransactionHashToHistory(transactionData.getHash())) {
                 log.debug("Transaction {} is already in history of address {}", transactionData.getHash(), baseTransactionData.getAddressHash());
             }
@@ -138,9 +134,9 @@ public class TransactionHelper implements ITransactionHelper {
                 return false;
             }
 
-            return TransactionTypeValidation.valueOf(transactionType.toString()).validateBaseTransactions(transactionData);
+            return TransactionTypeValidation.getByType(transactionType).validateBaseTransactions(transactionData);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Validate transaction type error", e);
             return false;
         }
     }
@@ -148,7 +144,7 @@ public class TransactionHelper implements ITransactionHelper {
     @Override
     public boolean validateBaseTransactionTrustScoreNodeResults(TransactionData transactionData) {
         for (BaseTransactionData baseTransactionData : transactionData.getBaseTransactions()) {
-            if (ITrustScoreNodeValidatable.class.isAssignableFrom(baseTransactionData.getClass()) && !validateBaseTransactionTrustScoreNodeResult((ITrustScoreNodeValidatable) baseTransactionData)) {
+            if (baseTransactionData instanceof ITrustScoreNodeValidatable && !validateBaseTransactionTrustScoreNodeResult((ITrustScoreNodeValidatable) baseTransactionData)) {
                 return false;
             }
         }
@@ -161,7 +157,7 @@ public class TransactionHelper implements ITransactionHelper {
             return isTrustScoreNodeResultValid(trustScoreNodeValidatable.getTrustScoreNodeResult());
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Validate base transaction trust score node result error", e);
             return false;
         }
     }
@@ -195,15 +191,13 @@ public class TransactionHelper implements ITransactionHelper {
     }
 
     public boolean isTransactionAlreadyPropagated(TransactionData transactionData) {
-        synchronized (transactionData) {
-            if (isTransactionExists(transactionData)) {
-                if (!isTransactionHashProcessing(transactionData.getHash())) {
-                    addDspResultToDb(transactionData.getDspConsensusResult());
-                }
-                return true;
+        if (isTransactionExists(transactionData)) {
+            if (!isTransactionHashProcessing(transactionData.getHash())) {
+                addDspResultToDb(transactionData.getDspConsensusResult());
             }
-            return false;
+            return true;
         }
+        return false;
     }
 
     private void addDspResultToDb(DspConsensusResult dspConsensusResult) {
@@ -218,19 +212,21 @@ public class TransactionHelper implements ITransactionHelper {
 
     public boolean validateTrustScore(TransactionData transactionData) {
         Hash transactionHash = transactionData.getHash();
+        Hash senderHash = transactionData.getSenderHash();
         List<TransactionTrustScoreData> transactionTrustScores = transactionData.getTrustScoreResults();
         if (transactionTrustScores == null)
             return false;
         Map<Double, Integer> trustScoreResults = new HashMap<>();
         Set<Hash> transactionTrustScoreNodes = new HashSet<>();
         for (TransactionTrustScoreData transactionTrustScoreData : transactionTrustScores) {
-            if (transactionTrustScoreNodes.contains(transactionTrustScoreData.getSignerHash()) || !transactionTrustScoreData.getTransactionHash().equals(transactionHash) ||
-                    !transactionTrustScoreCrypto.verifySignature(transactionTrustScoreData))
+            ExpandedTransactionTrustScoreData expandedTransactionTrustScoreData = new ExpandedTransactionTrustScoreData(senderHash, transactionHash, transactionTrustScoreData);
+            if (transactionTrustScoreNodes.contains(transactionTrustScoreData.getTrustScoreNodeHash()) ||
+                    !expandedTransactionTrustScoreCrypto.verifySignature(expandedTransactionTrustScoreData))
                 return false;
             Double transactionTrustScore = transactionTrustScoreData.getTrustScore();
             trustScoreResults.computeIfPresent(transactionTrustScore, (trustScore, currentAmount) -> currentAmount + 1);
             trustScoreResults.putIfAbsent(transactionTrustScore, 1);
-            transactionTrustScoreNodes.add(transactionTrustScoreData.getSignerHash());
+            transactionTrustScoreNodes.add(transactionTrustScoreData.getTrustScoreNodeHash());
         }
         transactionData.setSenderTrustScore(Collections.max(trustScoreResults.entrySet(), Map.Entry.comparingByValue()).getKey());
         return true;
@@ -238,12 +234,12 @@ public class TransactionHelper implements ITransactionHelper {
 
     public void startHandleTransaction(TransactionData transactionData) {
 
-        transactionHashToTransactionStateStackMapping.put(transactionData.getHash(), new Stack());
+        transactionHashToTransactionStateStackMapping.put(transactionData.getHash(), new Stack<>());
         transactionHashToTransactionStateStackMapping.get(transactionData.getHash()).push(RECEIVED);
     }
 
     public void endHandleTransaction(TransactionData transactionData) {
-        if (!transactionHashToTransactionStateStackMapping.containsKey(transactionData.getHash())) {
+        if (!isTransactionHashProcessing(transactionData.getHash())) {
             return;
         }
         if (isTransactionFinished(transactionData)) {
@@ -251,15 +247,12 @@ public class TransactionHelper implements ITransactionHelper {
         } else {
             rollbackTransaction(transactionData);
         }
-
-        synchronized (transactionData) {
-            transactionHashToTransactionStateStackMapping.remove(transactionData.getHash());
-        }
+        transactionHashToTransactionStateStackMapping.remove(transactionData.getHash());
     }
 
     @Override
     public boolean isTransactionFinished(TransactionData transactionData) {
-        return transactionHashToTransactionStateStackMapping.get(transactionData.getHash()).peek().equals(FINISHED);
+        return isTransactionHashProcessing(transactionData.getHash()) && transactionHashToTransactionStateStackMapping.get(transactionData.getHash()).peek().equals(FINISHED);
     }
 
     private void rollbackTransaction(TransactionData transactionData) {
@@ -276,10 +269,9 @@ public class TransactionHelper implements ITransactionHelper {
                 case RECEIVED:
                     transactionHashToTransactionStateStackMapping.remove(transactionData.getHash());
                     break;
-                default: {
+                default:
                     log.error("Transaction {} has a state {} which is illegal in rollback scenario", transactionData, transactionState);
                     throw new IllegalArgumentException("Invalid transaction state");
-                }
             }
         }
     }
@@ -318,7 +310,6 @@ public class TransactionHelper implements ITransactionHelper {
             confirmationService.setDspcToTrue(transactionData.getDspConsensusResult());
         }
         updateAddressTransactionHistory(transactionData);
-        liveViewService.addTransaction(transactionData);
         clusterService.attachToCluster(transactionData);
     }
 

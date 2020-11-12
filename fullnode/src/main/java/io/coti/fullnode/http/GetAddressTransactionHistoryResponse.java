@@ -2,14 +2,16 @@ package io.coti.fullnode.http;
 
 import io.coti.basenode.data.TransactionData;
 import io.coti.basenode.http.GetTransactionsResponse;
-import lombok.extern.slf4j.Slf4j;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 import java.util.List;
 
-@Slf4j
+@Data
+@EqualsAndHashCode(callSuper = true)
 public class GetAddressTransactionHistoryResponse extends GetTransactionsResponse {
 
-    public GetAddressTransactionHistoryResponse(List<TransactionData> transactionsData) throws Exception {
+    public GetAddressTransactionHistoryResponse(List<TransactionData> transactionsData) {
         super(transactionsData);
     }
 }

@@ -5,6 +5,7 @@ import io.coti.basenode.data.TransactionData;
 import io.coti.basenode.http.data.TransactionStatus;
 import io.coti.fullnode.websocket.data.GeneratedAddressMessage;
 import io.coti.fullnode.websocket.data.NotifyTransactionChange;
+import io.coti.fullnode.websocket.data.TotalTransactionsMessage;
 import io.coti.fullnode.websocket.data.UpdatedBalanceMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,7 @@ import java.math.BigDecimal;
 @Component
 public class WebSocketSender {
 
-    private SimpMessagingTemplate messagingSender;
+    private final SimpMessagingTemplate messagingSender;
 
     @Autowired
     public WebSocketSender(SimpMessagingTemplate simpMessagingTemplate) {
@@ -33,15 +34,22 @@ public class WebSocketSender {
     public void notifyTransactionHistoryChange(TransactionData transactionData, TransactionStatus transactionStatus) {
         log.debug("Transaction {} is about to be sent to the subscribed user", transactionData.getHash());
         NotifyTransactionChange notifyTransactionChange = new NotifyTransactionChange(transactionData, transactionStatus);
-        transactionData.getBaseTransactions().forEach(baseTransactionData -> {
-            messagingSender.convertAndSend("/topic/addressTransactions/" + baseTransactionData.getAddressHash().toString(), notifyTransactionChange);
-        });
+        transactionData.getBaseTransactions().forEach(baseTransactionData ->
+                messagingSender.convertAndSend("/topic/addressTransactions/" + baseTransactionData.getAddressHash().toString(), notifyTransactionChange)
+        );
         messagingSender.convertAndSend("/topic/transactions", notifyTransactionChange);
+        messagingSender.convertAndSend("/topic/transaction/" + transactionData.getHash().toString(), notifyTransactionChange);
     }
 
     public void notifyGeneratedAddress(Hash addressHash) {
         log.debug("Address {} is about to be sent to the subscribed user", addressHash);
         messagingSender.convertAndSend("/topic/address/" + addressHash.toString(),
                 new GeneratedAddressMessage(addressHash));
+    }
+
+    public void notifyTotalTransactionsChange(int totalTransactions) {
+        log.debug("Total transactions number {} is about to be sent to the subscribed user", totalTransactions);
+        messagingSender.convertAndSend("/topic/transaction/total",
+                new TotalTransactionsMessage(totalTransactions));
     }
 }

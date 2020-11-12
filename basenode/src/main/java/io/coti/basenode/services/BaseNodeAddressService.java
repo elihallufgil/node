@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.coti.basenode.data.AddressData;
 import io.coti.basenode.data.Hash;
+import io.coti.basenode.data.RequestedAddressHashData;
 import io.coti.basenode.http.AddressFileRequest;
 import io.coti.basenode.http.CustomGson;
 import io.coti.basenode.http.Response;
@@ -14,16 +15,16 @@ import io.coti.basenode.model.Addresses;
 import io.coti.basenode.services.interfaces.IAddressService;
 import io.coti.basenode.services.interfaces.IValidationService;
 import lombok.extern.slf4j.Slf4j;
-import org.rocksdb.RocksIterator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.util.SerializationUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.*;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import static io.coti.basenode.http.BaseNodeHttpStringConstants.ADDRESS_BATCH_UPLOADED;
@@ -32,10 +33,14 @@ import static io.coti.basenode.http.BaseNodeHttpStringConstants.ADDRESS_BATCH_UP
 @Slf4j
 @Service
 public class BaseNodeAddressService implements IAddressService {
+
+    protected static final int TRUSTED_RESULT_MAX_DURATION_IN_MILLIS = 600_000;
     @Autowired
     private Addresses addresses;
     @Autowired
     private IValidationService validationService;
+    @Autowired
+    private FileService fileService;
 
     public void init() {
         log.info("{} is up", this.getClass().getSimpleName());
@@ -69,13 +74,12 @@ public class BaseNodeAddressService implements IAddressService {
             addNewAddress(addressData);
             continueHandleGeneratedAddress(addressData);
         } catch (Exception e) {
-            log.error("Error at handlePropagatedAddress");
-            e.printStackTrace();
+            log.error("Error at handlePropagatedAddress", e);
         }
     }
 
     protected void continueHandleGeneratedAddress(AddressData addressData) {
-
+        // implemented by sub classes
     }
 
     @Override
@@ -90,18 +94,13 @@ public class BaseNodeAddressService implements IAddressService {
             output.write("[");
             output.flush();
 
-            RocksIterator iterator = addresses.getIterator();
-            iterator.seekToFirst();
-            while (iterator.isValid()) {
-                AddressData addressData = (AddressData) SerializationUtils.deserialize(iterator.value());
-                addressData.setHash(new Hash(iterator.key()));
+            addresses.forEachWithLastIteration((addressData, isLastIteration) -> {
                 output.write(new CustomGson().getInstance().toJson(new AddressResponseData(addressData)));
-                iterator.next();
-                if (iterator.isValid()) {
+                if (isLastIteration.equals(Boolean.FALSE)) {
                     output.write(",");
                 }
                 output.flush();
-            }
+            });
             output.write("]");
             output.flush();
         } catch (Exception e) {
@@ -109,6 +108,7 @@ public class BaseNodeAddressService implements IAddressService {
         }
     }
 
+    @Override
     public ResponseEntity<IResponse> uploadAddressBatch(AddressFileRequest request) {
         MultipartFile multiPartFile = request.getFile();
 
@@ -117,13 +117,12 @@ public class BaseNodeAddressService implements IAddressService {
 
         try {
             if (file.createNewFile()) {
-                FileOutputStream fileOutputStream = new FileOutputStream(file);
-                fileOutputStream.write(multiPartFile.getBytes());
-                fileOutputStream.close();
+                fileService.writeToFile(multiPartFile, file);
             }
         } catch (IOException e) {
-
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new Response(String.format(ADDRESS_BATCH_UPLOAD_ERROR, e.getMessage())));
         }
+
         String line;
         try (BufferedReader bufferedReader = new BufferedReader(new FileReader(fileName))) {
             while ((line = bufferedReader.readLine()) != null) {
@@ -137,9 +136,18 @@ public class BaseNodeAddressService implements IAddressService {
                 addressResponseDataList.forEach(addressResponseData -> addresses.put(new AddressData(new Hash(addressResponseData.getAddress()), addressResponseData.getCreationTime())));
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Address batch upload error", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new Response(String.format(ADDRESS_BATCH_UPLOAD_ERROR, e.getMessage())));
         }
         return ResponseEntity.status(HttpStatus.OK).body(new Response(ADDRESS_BATCH_UPLOADED));
+    }
+
+    @Override
+    public boolean validateRequestedAddressHashExistsAndRelevant(RequestedAddressHashData requestedAddressHashData) {
+        if (requestedAddressHashData != null) {
+            long diffInMilliSeconds = Math.abs(Duration.between(Instant.now(), requestedAddressHashData.getLastUpdateTime()).toMillis());
+            return diffInMilliSeconds <= TRUSTED_RESULT_MAX_DURATION_IN_MILLIS;
+        }
+        return false;
     }
 }

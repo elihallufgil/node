@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 
 @Component
 public class NetworkNodeCrypto extends SignatureCrypto<NetworkNodeData> {
+
     @Override
     public byte[] getSignatureMessage(NetworkNodeData networkNodeData) {
 
@@ -15,16 +16,16 @@ public class NetworkNodeCrypto extends SignatureCrypto<NetworkNodeData> {
         byte[] httpPortInBytes = networkNodeData.getHttpPort() != null ? networkNodeData.getHttpPort().getBytes() : new byte[0];
         byte[] propagationPortInBytes = networkNodeData.getPropagationPort() != null ? networkNodeData.getPropagationPort().getBytes() : new byte[0];
         byte[] receivingPortInBytes = networkNodeData.getReceivingPort() != null ? networkNodeData.getReceivingPort().getBytes() : new byte[0];
-        byte[] recoveryServerAddressInBytes = networkNodeData.getRecoveryServerAddress() != null ? networkNodeData.getRecoveryServerAddress().getBytes() : new byte[0];
         byte[] networkTypeInBytes = networkNodeData.getNetworkType().toString().getBytes();
         byte[] webServerUrlInBytes = networkNodeData.getWebServerUrl() != null ? networkNodeData.getWebServerUrl().getBytes() : new byte[0];
+        byte[] versionInBytes = networkNodeData.getVersion() != null ? networkNodeData.getVersion().getBytes() : new byte[0];
 
         int networkNodeBufferLength = nodeTypeInBytes.length + addressInBytes.length + httpPortInBytes.length + propagationPortInBytes.length +
-                receivingPortInBytes.length + recoveryServerAddressInBytes.length + networkTypeInBytes.length + webServerUrlInBytes.length;
+                receivingPortInBytes.length + networkTypeInBytes.length + webServerUrlInBytes.length + versionInBytes.length;
         ByteBuffer networkNodeBuffer = ByteBuffer.allocate(networkNodeBufferLength)
                 .put(nodeTypeInBytes).put(addressInBytes).put(httpPortInBytes)
                 .put(propagationPortInBytes).put(receivingPortInBytes)
-                .put(recoveryServerAddressInBytes).put(networkTypeInBytes).put(webServerUrlInBytes);
+                .put(networkTypeInBytes).put(webServerUrlInBytes).put(versionInBytes);
 
         return CryptoHelper.cryptoHash(networkNodeBuffer.array()).getBytes();
     }
