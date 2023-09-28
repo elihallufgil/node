@@ -19,6 +19,7 @@ storage*.properties
 *.csv
 *.json
 *.txt
+*.txtt
 
 ### STS ###
 .apt_generated
